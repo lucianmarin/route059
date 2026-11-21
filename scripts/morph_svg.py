@@ -551,6 +551,204 @@ def snap_hv_span(span: list[tuple[float, float]], tol: float, max_angle_deg: flo
     return span
 
 
+def _max_chamfer_distance(
+    ca: list[list[tuple[float, float]]],
+    cb: list[list[tuple[float, float]]],
+    n_pts: int = 64,
+) -> float:
+    """Max unit-box normalized Chamfer distance across paired outer/inner contours."""
+    def norm(c):
+        pts = resample_contour(c, n_pts)
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        w = max(max(xs) - min(xs), 1e-6)
+        h = max(max(ys) - min(ys), 1e-6)
+        x0, y0 = min(xs), min(ys)
+        return [((p[0] - x0) / w, (p[1] - y0) / h) for p in pts]
+
+    # Compare largest (outer) contour + check relative counter centroid shift
+    oa_raw = max(ca, key=lambda c: abs(signed_area(c)))
+    ob_raw = max(cb, key=lambda c: abs(signed_area(c)))
+    oa, ob = norm(oa_raw), norm(ob_raw)
+    da = sum(min(math.hypot(p[0] - q[0], p[1] - q[1]) for q in ob) for p in oa) / n_pts
+    db = sum(min(math.hypot(p[0] - q[0], p[1] - q[1]) for q in oa) for p in ob) / n_pts
+    max_d = 0.5 * (da + db)
+
+    # Also check if inner counters sit at incompatible positions inside the outer bounding box
+    if len(ca) > 1 and len(ca) == len(cb):
+        ax0, ax1 = min(p[0] for p in oa_raw), max(p[0] for p in oa_raw)
+        ay0, ay1 = min(p[1] for p in oa_raw), max(p[1] for p in oa_raw)
+        bx0, bx1 = min(p[0] for p in ob_raw), max(p[0] for p in ob_raw)
+        by0, by1 = min(p[1] for p in ob_raw), max(p[1] for p in ob_raw)
+        aw, ah = max(ax1 - ax0, 1e-6), max(ay1 - ay0, 1e-6)
+        bw, bh = max(bx1 - bx0, 1e-6), max(by1 - by0, 1e-6)
+        holes_a = [c for c in ca if c is not oa_raw]
+        holes_b = [c for c in cb if c is not ob_raw]
+        for ha in holes_a:
+            cxa = (sum(p[0] for p in ha) / len(ha) - ax0) / aw
+            cya = (sum(p[1] for p in ha) / len(ha) - ay0) / ah
+            best = min(
+                math.hypot(
+                    cxa - (sum(p[0] for p in hb) / len(hb) - bx0) / bw,
+                    cya - (sum(p[1] for p in hb) / len(hb) - by0) / bh,
+                )
+                for hb in holes_b
+            )
+            if best > 0.14:
+                max_d = max(max_d, best)
+    return max_d
+
+
+def _measure_hv_weights(contours: list[list[tuple[float, float]]]) -> tuple[float | None, float | None]:
+    """Measure median vertical-stem weight (|nx| > 0.7) and horizontal-bar weight (|ny| > 0.7)."""
+    if not contours:
+        return None, None
+    outer_ccw = signed_area(max(contours, key=lambda c: abs(signed_area(c)))) > 0
+    pts, norms = [], []
+    for c in contours:
+        is_ccw = signed_area(c) > 0
+        ns = _vertex_normals(c, is_ccw) if (is_ccw == outer_ccw) else [(-nx, -ny) for nx, ny in _vertex_normals(c, is_ccw)]
+        pts.extend(c)
+        norms.extend(ns)
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    max_w = max(max(xs) - min(xs), max(ys) - min(ys)) * 0.35
+    if max_w < 5.0:
+        return None, None
+    ws_v, ws_h = [], []
+    for i in range(0, len(pts), 2):
+        w = _local_thickness(pts, norms, i, max_w)
+        if w is None:
+            continue
+        nx, ny = norms[i]
+        if abs(nx) > 0.7:
+            ws_v.append(w)
+        elif abs(ny) > 0.7:
+            ws_h.append(w)
+    ws_v.sort()
+    ws_h.sort()
+    wv = ws_v[len(ws_v) // 2] if ws_v else None
+    wh = ws_h[len(ws_h) // 2] if ws_h else None
+    if wv is None:
+        wv = wh
+    if wh is None:
+        wh = wv
+    return wv, wh
+
+
+def style_transfer_contours(
+    ca: list[list[tuple[float, float]]],
+    cb: list[list[tuple[float, float]]],
+    alpha: float = 0.45,
+    n_samples: int = 144,
+) -> list[list[tuple[float, float]]]:
+    """Topology-preserving style transfer for mismatched glyphs:
+    1. Gentle 2D proportion warp (FFD) toward cb's vertical/horizontal landmarks
+    2. Anisotropic H/V stroke-contrast transfer toward cb's stem/bar weights
+    3. Curve-tension transfer (subtle superellipse squaring on curved spans)
+    """
+    ra_list = [resample_contour(c, n_samples) for c in ca]
+    rb_list = [resample_contour(c, n_samples) for c in cb]
+
+    # 1. Gentle 2D proportion warp (preserving baseline near 0 and monospace centering)
+    all_a = [p for c in ra_list for p in c]
+    all_b = [p for c in rb_list for p in c]
+    ax0, ax1 = min(p[0] for p in all_a), max(p[0] for p in all_a)
+    ay0, ay1 = min(p[1] for p in all_a), max(p[1] for p in all_a)
+    bx0, bx1 = min(p[0] for p in all_b), max(p[0] for p in all_b)
+    by0, by1 = min(p[1] for p in all_b), max(p[1] for p in all_b)
+    aw, ah = max(ax1 - ax0, 1e-6), max(ay1 - ay0, 1e-6)
+    bw, bh = max(bx1 - bx0, 1e-6), max(by1 - by0, 1e-6)
+    acx = 0.5 * (ax0 + ax1)
+    ay_mid = sum(p[1] for p in all_a) / len(all_a)
+    by_mid = sum(p[1] for p in all_b) / len(all_b)
+
+    sx = 1.0 + max(-0.15, min(0.15, (bw / aw - 1.0) * alpha * 0.35))
+    ty0 = ay0 if abs(ay0) < 25.0 else ay0 + (by0 - ay0) * alpha * 0.4
+    ty1 = ay1 + (by1 - ay1) * alpha * 0.4
+    t_mid_shift = max(-0.08 * ah, min(0.08 * ah, (by_mid - ay_mid) * alpha * 0.4))
+
+    warped = []
+    for c in ra_list:
+        wc = []
+        for x, y in c:
+            nx = acx + (x - acx) * sx
+            u = (y - ay0) / ah
+            # Smooth bell bump for vertical midpoint landmark
+            ny = ty0 + u * (ty1 - ty0) + 4.0 * u * (1.0 - u) * t_mid_shift
+            wc.append((nx, ny))
+        warped.append(wc)
+
+    # 2. Anisotropic H/V contrast transfer
+    awv, awh = _measure_hv_weights(warped)
+    bwv, bwh = _measure_hv_weights(rb_list)
+    if awv and bwv and awh and bwh:
+        target_v = (1.0 - alpha) * awv + alpha * bwv
+        target_h = (1.0 - alpha) * awh + alpha * bwh
+        outer_ccw = signed_area(max(warped, key=lambda c: abs(signed_area(c)))) > 0
+        m_pts, m_norms, ranges = [], [], []
+        for c in warped:
+            start = len(m_pts)
+            is_ccw = signed_area(c) > 0
+            ns = _vertex_normals(c, is_ccw) if (is_ccw == outer_ccw) else [(-nx, -ny) for nx, ny in _vertex_normals(c, is_ccw)]
+            m_pts.extend(c)
+            m_norms.extend(ns)
+            ranges.append((start, len(m_pts)))
+
+        max_w = max(aw, ah) * 0.35
+        raw_shifts: list[float | None] = [None] * len(m_pts)
+        for i in range(len(m_pts)):
+            w = _local_thickness(m_pts, m_norms, i, max_w)
+            if w is None:
+                continue
+            nx, ny = m_norms[i]
+            t_w = target_v * (nx * nx) + target_h * (ny * ny)
+            if 0.45 * t_w <= w <= 1.65 * t_w:
+                delta = 0.5 * (t_w - w) * 0.65
+                raw_shifts[i] = max(-0.22 * t_w, min(0.22 * t_w, delta))
+
+        styled = []
+        for start, end in ranges:
+            n = end - start
+            c_pts = m_pts[start:end]
+            c_norms = m_norms[start:end]
+            c_raw = raw_shifts[start:end]
+            valid = [i for i, v in enumerate(c_raw) if v is not None]
+            c_shifts = [0.0] * n
+            if valid:
+                for i in range(n):
+                    if c_raw[i] is not None:
+                        c_shifts[i] = c_raw[i]
+                    else:
+                        prev_i = max((v for v in valid if v < i), default=valid[-1])
+                        next_i = min((v for v in valid if v > i), default=valid[0])
+                        d_prev, d_next = (i - prev_i) % n, (next_i - i) % n
+                        t = d_prev / (d_prev + d_next) if (d_prev + d_next) > 0 else 0.5
+                        c_shifts[i] = (1.0 - t) * c_raw[prev_i] + t * c_raw[next_i]
+
+            smooth = [
+                (c_shifts[(i - 2) % n] + 2.0 * c_shifts[(i - 1) % n] + 3.0 * c_shifts[i]
+                 + 2.0 * c_shifts[(i + 1) % n] + c_shifts[(i + 2) % n]) / 9.0
+                for i in range(n)
+            ]
+            # 3. Curve-tension transfer: subtle superellipse push on curved non-corner diagonals
+            corner_set = {idx for idx, _ in detect_corners(c_pts, angle_thresh=0.45, k=1)}
+            tension_amp = 0.012 * min(aw, ah) * alpha
+            new_c = []
+            for i in range(n):
+                px, py = c_pts[i]
+                nx, ny = c_norms[i]
+                s = smooth[i]
+                if i not in corner_set:
+                    # 45° diagonals (|nx*ny| = 0.5) get gentle outward superellipse tension
+                    s += tension_amp * (2.0 * abs(nx * ny))
+                new_c.append((px + nx * s, py + ny * s))
+            styled.append(new_c)
+        warped = styled
+
+    return [taubin_fair_contour(c, iters=2) for c in warped]
+
+
 def morph_contours(
     root_a: ET.Element,
     root_b: ET.Element,
@@ -563,6 +761,10 @@ def morph_contours(
     cb = svg_to_contours(root_b, transform_b)
     if not ca or not cb or len(ca) != len(cb):
         return None
+
+    # Automatic topology-mismatch guard: use style transfer instead of shape morphing
+    if _max_chamfer_distance(ca, cb) > 0.09:
+        return style_transfer_contours(ca, cb, alpha=alpha, n_samples=n_samples)
 
     all_a = [p for c in ca for p in c]
     all_b = [p for c in cb for p in c]
