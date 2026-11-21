@@ -616,7 +616,7 @@ def _fit_cubic_span(
 
     seg_len = math.hypot(p3[0] - p0[0], p3[1] - p0[1])
     eps = 1e-6 * seg_len
-    if alpha1 < eps or alpha2 < eps or alpha1 > seg_len * 2.0 or alpha2 > seg_len * 2.0:
+    if alpha1 < eps or alpha2 < eps or alpha1 > seg_len * 0.65 or alpha2 > seg_len * 0.65:
         alpha1 = alpha2 = seg_len / 3.0
 
     p1 = _vadd(p0, _vmul(t_hat1, alpha1))
@@ -655,16 +655,45 @@ def contours_to_svg_path(contours: list[list[tuple[float, float]]], baseline: in
             opp = (corners[0] + len(c) // 2) % len(c)
             corners = sorted({corners[0], opp})
 
-        start = c[corners[0]]
-        seg = [f"M{round(start[0], 1)},{round(baseline - start[1], 1)}"]
         num_c = len(corners)
+        # First pass: extract spans and snap near-H/V straight spans consistently on shared corners
+        corner_pts = [list(c[idx]) for idx in corners]
+        spans: list[list[tuple[float, float]]] = []
+        is_line: list[bool] = []
         for k in range(num_c):
             i0 = corners[k]
             i1 = corners[(k + 1) % num_c]
             span = c[i0:i1 + 1] if i1 > i0 else c[i0:] + c[:i1 + 1]
+            spans.append(span)
+            straight = len(span) >= 2 and _max_line_err(span) <= tol * 1.2
+            is_line.append(straight)
+            if straight:
+                p0, p1 = span[0], span[-1]
+                dx, dy = p1[0] - p0[0], p1[1] - p0[1]
+                if math.hypot(dx, dy) >= 1e-6:
+                    ang_h = math.degrees(math.atan2(abs(dy), abs(dx)))
+                    ang_v = math.degrees(math.atan2(abs(dx), abs(dy)))
+                    if ang_h <= 3.5:
+                        ym = 0.5 * (p0[1] + p1[1])
+                        corner_pts[k][1] = ym
+                        corner_pts[(k + 1) % num_c][1] = ym
+                    elif ang_v <= 3.5:
+                        xm = 0.5 * (p0[0] + p1[0])
+                        corner_pts[k][0] = xm
+                        corner_pts[(k + 1) % num_c][0] = xm
+
+        start = corner_pts[0]
+        seg = [f"M{round(start[0], 1)},{round(baseline - start[1], 1)}"]
+        for k in range(num_c):
+            p_start = (corner_pts[k][0], corner_pts[k][1])
+            p_end = (corner_pts[(k + 1) % num_c][0], corner_pts[(k + 1) % num_c][1])
+            span = spans[k]
             if len(span) < 2:
                 continue
-            span = snap_hv_span(span, tol)
+            if is_line[k]:
+                seg.append(f"L{round(p_end[0], 1)},{round(baseline - p_end[1], 1)}")
+                continue
+            span = [p_start] + list(span[1:-1]) + [p_end]
             t1 = _vnorm(_vsub(span[min(2, len(span) - 1)], span[0]))
             t2 = _vnorm(_vsub(span[max(0, len(span) - 3)], span[-1]))
             for cmd in _fit_cubic_span(span, t1, t2, tol):
