@@ -6,9 +6,9 @@ Font family specifications and design tracking for **Route 138** (proportional s
 
 | Font | Format | UPM | Glyphs (cmap) | Styles Available | x-Height | Cap Height | Ascent / Descent (`hhea`) |
 | --- | --- | ---: | ---: | --- | ---: | ---: | --- |
-| **Route 159** | OTF (CFF) | 1000 | 346 (334) | UltraLight, Light, Regular, SemiBold, Bold, Heavy (+ Italics) | 520 | 740 | 970 / -230 |
+| **Route 159** | OTF (CFF) | 1000 | 346 (334) | Light, Regular, Bold | 520 | 740 | 970 / -230 |
 | **Vegur** | OTF / SFD | 1000 | 215 (214) | Light, Regular, Bold | 478 | 688 | 965 / -235 |
-| **Hack** | TTF | 2048 | 1573 (1548) | Regular, Bold, Italic, BoldItalic | 1120 (547 @ 1000) | 1493 (729 @ 1000) | 1901 / -483 |
+| **Hack** | TTF | 2048 | 1573 (1548) | Regular, Bold | 1120 (547 @ 1000) | 1493 (729 @ 1000) | 1901 / -483 |
 
 ---
 
@@ -69,9 +69,9 @@ Every glyph is stored as an editable `.svg` file with metric metadata (`data-gly
 ./scripts/export_sources_svg.py
 ```
 Exports raw SVGs into:
-- `svg/route159/{Regular,Bold,Italic,BoldItalic}/` (332–334 glyphs)
+- `svg/route159/{Regular,Bold}/` (332–334 glyphs)
 - `svg/vegur/{Regular,Bold}/` (214 glyphs)
-- `svg/hack/{Regular,Bold,Italic,BoldItalic}/` (1,157–1,234 Latin + symbol/terminal glyphs; non-Latin scripts excluded)
+- `svg/hack/{Regular,Bold}/` (1,157–1,234 Latin + symbol/terminal glyphs; non-Latin scripts excluded)
 
 ### Step 2: Reshape & Build Route 138 (Sans) from SVGs
 ```bash
