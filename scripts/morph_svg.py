@@ -122,7 +122,7 @@ def _turn_angle(p_prev, p_cur, p_next) -> float:
     return math.acos(cos_a)
 
 
-def detect_corners(pts: list[tuple[float, float]], angle_thresh: float = 0.50, k: int = 2) -> list[tuple[int, float]]:
+def detect_corners(pts: list[tuple[float, float]], angle_thresh: float = 0.50, k: int = 1) -> list[tuple[int, float]]:
     """Return sorted (index, turning_angle) for local-maximum sharp corners on a closed contour."""
     n = len(pts)
     if n < 2 * k + 1:
@@ -435,12 +435,69 @@ def equalize_stroke_weight(
             ) / 9.0
             for i in range(n)
         ]
-        new_c = []
-        for i in range(n):
-            px, py = m_pts[start + i]
-            nx, ny = m_norms[start + i]
-            s = smooth[i]
-            new_c.append((px + nx * s, py + ny * s))
+
+        # Keep straight spans rigid (uniform offset) so stroke intersections never flare or pinch
+        c_pts = m_pts[start:end]
+        c_norms = m_norms[start:end]
+        new_c = [
+            (c_pts[i][0] + c_norms[i][0] * smooth[i], c_pts[i][1] + c_norms[i][1] * smooth[i])
+            for i in range(n)
+        ]
+
+        corners = [idx for idx, _ in detect_corners(c_pts, angle_thresh=0.45, k=1)]
+        if len(corners) >= 2:
+            line_tol = max(2.0, target_w * 0.04)
+            num_c = len(corners)
+            # For each straight span, record its shifted line (point, unit_dir)
+            span_lines: list[tuple[tuple[float, float], tuple[float, float]] | None] = [None] * num_c
+            span_indices: list[list[int]] = []
+            for k in range(num_c):
+                i0 = corners[k]
+                i1 = corners[(k + 1) % num_c]
+                idxs = list(range(i0, i1 + 1)) if i1 > i0 else list(range(i0, n)) + list(range(0, i1 + 1))
+                span_indices.append(idxs)
+                span_pts = [c_pts[i] for i in idxs]
+                if len(span_pts) >= 3 and _max_line_err(span_pts) <= line_tol:
+                    p0, p1 = span_pts[0], span_pts[-1]
+                    dx, dy = p1[0] - p0[0], p1[1] - p0[1]
+                    seg_len = math.hypot(dx, dy)
+                    if seg_len > 1e-6:
+                        ux, uy = dx / seg_len, dy / seg_len
+                        # Use interior median shift so junction rays at endpoints don't bias the span
+                        interior = idxs[1:-1]
+                        mid_shifts = sorted(c_shifts[i] for i in interior)
+                        u_shift = mid_shifts[len(mid_shifts) // 2]
+                        # Align constant span normal with the contour's outward normal
+                        mx, my = c_norms[interior[len(interior) // 2]]
+                        nx, ny = (uy, -ux) if (uy * mx - ux * my) >= 0 else (-uy, ux)
+                        q0 = (p0[0] + nx * u_shift, p0[1] + ny * u_shift)
+                        span_lines[k] = (q0, (ux, uy))
+                        for i in interior:
+                            new_c[i] = (c_pts[i][0] + nx * u_shift, c_pts[i][1] + ny * u_shift)
+
+            # Recompute corners where two straight spans meet as their exact line intersection
+            for k in range(num_c):
+                l_prev = span_lines[(k - 1) % num_c]
+                l_next = span_lines[k]
+                ci = corners[k]
+                if l_prev is not None and l_next is not None:
+                    (x1, y1), (ux1, uy1) = l_prev
+                    (x2, y2), (ux2, uy2) = l_next
+                    denom = ux1 * uy2 - uy1 * ux2
+                    if abs(denom) > 0.15:
+                        t = ((x2 - x1) * uy2 - (y2 - y1) * ux2) / denom
+                        ix, iy = x1 + t * ux1, y1 + t * uy1
+                        if math.hypot(ix - c_pts[ci][0], iy - c_pts[ci][1]) <= 0.35 * target_w:
+                            new_c[ci] = (ix, iy)
+                elif l_prev is not None:
+                    (x1, y1), (ux1, uy1) = l_prev
+                    t = (c_pts[ci][0] - x1) * ux1 + (c_pts[ci][1] - y1) * uy1
+                    new_c[ci] = (x1 + t * ux1, y1 + t * uy1)
+                elif l_next is not None:
+                    (x2, y2), (ux2, uy2) = l_next
+                    t = (c_pts[ci][0] - x2) * ux2 + (c_pts[ci][1] - y2) * uy2
+                    new_c[ci] = (x2 + t * ux2, y2 + t * uy2)
+
         result.append(new_c)
     return result
 
@@ -450,7 +507,7 @@ def taubin_fair_contour(pts: list[tuple[float, float]], iters: int = 3) -> list[
     n = len(pts)
     if n < 8:
         return pts
-    corner_set = {idx for idx, _ in detect_corners(pts, angle_thresh=0.45, k=2)}
+    corner_set = {idx for idx, _ in detect_corners(pts, angle_thresh=0.45, k=1)}
     # Pin each sharp corner and its immediate neighbor so corners stay razor-sharp
     pinned = set()
     for c in corner_set:
@@ -646,7 +703,7 @@ def contours_to_svg_path(contours: list[list[tuple[float, float]]], baseline: in
     for c in contours:
         if len(c) < 3:
             continue
-        corners = [idx for idx, _ in detect_corners(c, angle_thresh=0.45, k=2)]
+        corners = [idx for idx, _ in detect_corners(c, angle_thresh=0.45, k=1)]
         if len(corners) == 0:
             i_min = min(range(len(c)), key=lambda i: c[i][1])
             i_max = max(range(len(c)), key=lambda i: c[i][1])
