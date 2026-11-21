@@ -1,0 +1,11 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Generated intermediate glyph SVGs (rebuilt by scripts/pipeline.sh)
+svg/
+dist/
