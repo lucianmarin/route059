@@ -14,7 +14,7 @@ from fontTools.pens.boundsPen import BoundsPen
 from fontTools.misc.transform import Identity
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from morph_svg import load_svg_dir
+from morph_svg import load_svg_dir, style_transfer_extend_bezier
 
 ROOT = Path(__file__).resolve().parent.parent
 SVG_ROOT = ROOT / "svg"
@@ -125,9 +125,11 @@ def main():
                 composed += 1
             else:
                 s = scale_lower if chr(cp).islower() else scale_upper
-                d, _ = get_path_and_bounds(r_root, Identity.scale(s, s))
-                adv = round(int(r_root.attrib["data-advance"]) * s)
-                write_svg(vegur_dir / f"U+{cp:04X}_{gn}.svg", gn, cp, adv, d, f"route159-scaled/{style}")
+                d, _ = style_transfer_extend_bezier(
+                    r_root, Identity.scale(s, s), baseline=VEGUR_BASELINE, sx=0.97, tension=0.97
+                )
+                adv = round(int(r_root.attrib["data-advance"]) * s * 0.97)
+                write_svg(vegur_dir / f"U+{cp:04X}_{gn}.svg", gn, cp, adv, d, f"route159-style-transferred/{style}")
                 fallback += 1
 
         final_count = len(load_svg_dir(vegur_dir))

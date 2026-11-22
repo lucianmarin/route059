@@ -570,9 +570,13 @@ def _max_chamfer_distance(
     oa_raw = max(ca, key=lambda c: abs(signed_area(c)))
     ob_raw = max(cb, key=lambda c: abs(signed_area(c)))
     oa, ob = norm(oa_raw), norm(ob_raw)
-    da = sum(min(math.hypot(p[0] - q[0], p[1] - q[1]) for q in ob) for p in oa) / n_pts
-    db = sum(min(math.hypot(p[0] - q[0], p[1] - q[1]) for q in oa) for p in ob) / n_pts
-    max_d = 0.5 * (da + db)
+    dists_a = [min(math.hypot(p[0] - q[0], p[1] - q[1]) for q in ob) for p in oa]
+    dists_b = [min(math.hypot(p[0] - q[0], p[1] - q[1]) for q in oa) for p in ob]
+    max_d = 0.5 * (sum(dists_a) + sum(dists_b)) / n_pts
+    # Catch local structural mismatches (e.g. G with vs without crossbar) via Hausdorff distance
+    hd = max(max(dists_a), max(dists_b))
+    if hd > 0.22:
+        max_d = max(max_d, hd * 0.5)
 
     # Also check if inner counters sit at incompatible positions inside the outer bounding box
     if len(ca) > 1 and len(ca) == len(cb):
@@ -749,56 +753,482 @@ def style_transfer_contours(
     return [taubin_fair_contour(c, iters=2) for c in warped]
 
 
+# --- Native Bezier-Segment Morphing Engine ---
+
+def _lerp_pt(a, b, t: float):
+    return (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
+
+
+def _split_cubic(seg, t: float):
+    """Exact de Casteljau subdivision of cubic segment (p0, p1, p2, p3) at parameter t in (0, 1)."""
+    p0, p1, p2, p3 = seg
+    q0 = _lerp_pt(p0, p1, t)
+    q1 = _lerp_pt(p1, p2, t)
+    q2 = _lerp_pt(p2, p3, t)
+    r0 = _lerp_pt(q0, q1, t)
+    r1 = _lerp_pt(q1, q2, t)
+    s0 = _lerp_pt(r0, r1, t)
+    return (p0, q0, r0, s0), (s0, r1, q2, p3)
+
+
+def _seg_len(seg) -> float:
+    p0, p1, p2, p3 = seg
+    # 4-chord arc-length approximation
+    pts = [p0, cubic_pt(p0, p1, p2, p3, 0.25), cubic_pt(p0, p1, p2, p3, 0.5), cubic_pt(p0, p1, p2, p3, 0.75), p3]
+    return sum(math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]) for i in range(4))
+
+
+def _seg_is_line(seg, tol: float = 0.5) -> bool:
+    p0, p1, p2, p3 = seg
+    vx, vy = p3[0] - p0[0], p3[1] - p0[1]
+    l = math.hypot(vx, vy)
+    if l < 1e-6:
+        return True
+    d1 = abs((p1[0] - p0[0]) * vy - (p1[1] - p0[1]) * vx) / l
+    d2 = abs((p2[0] - p0[0]) * vy - (p2[1] - p0[1]) * vx) / l
+    return d1 <= tol and d2 <= tol
+
+
+def _reverse_bezier_contour(segs):
+    return [(p3, p2, p1, p0) for p0, p1, p2, p3 in reversed(segs)]
+
+
+def _bezier_signed_area(segs) -> float:
+    pts = []
+    for p0, p1, p2, p3 in segs:
+        pts.append(p0)
+        pts.append(cubic_pt(p0, p1, p2, p3, 0.5))
+    return signed_area(pts)
+
+
+def svg_to_bezier_contours(root: ET.Element, font_transform=Identity) -> list[list[tuple]]:
+    """Extract native closed cubic Bezier segment contours [(p0, p1, p2, p3), ...] in Y-up font coords."""
+    path_elem = root.find("{http://www.w3.org/2000/svg}path")
+    d = path_elem.attrib.get("d", "").strip() if path_elem is not None else ""
+    if not d:
+        return []
+    baseline = int(root.attrib.get("data-baseline", "800"))
+    unflip = Identity.translate(0, baseline).scale(1, -1)
+    rp = RecordingPen()
+    SVGPath.fromstring(f'<svg xmlns="http://www.w3.org/2000/svg"><path d="{d}"/></svg>').draw(
+        TransformPen(rp, font_transform.transform(unflip))
+    )
+
+    def make_line(a, b):
+        return (a, _lerp_pt(a, b, 1.0 / 3.0), _lerp_pt(a, b, 2.0 / 3.0), b)
+
+    contours, cur, start, pos = [], [], None, None
+    for op, pts in rp.value:
+        if op == "moveTo":
+            if cur:
+                contours.append(cur)
+            cur, start, pos = [], pts[0], pts[0]
+        elif op == "lineTo":
+            p3 = pts[0]
+            if math.hypot(p3[0] - pos[0], p3[1] - pos[1]) > 1e-4:
+                cur.append(make_line(pos, p3))
+                pos = p3
+        elif op == "curveTo":
+            p1, p2, p3 = pts
+            if math.hypot(p3[0] - pos[0], p3[1] - pos[1]) > 1e-4 or math.hypot(p1[0] - pos[0], p1[1] - pos[1]) > 1e-4:
+                cur.append((pos, p1, p2, p3))
+                pos = p3
+        elif op == "qCurveTo":
+            # Degree-elevate TrueType quadratic splines to exact cubics
+            qpts = list(pts)
+            if qpts[-1] is None:
+                continue
+            for idx in range(len(qpts) - 1):
+                q = qpts[idx]
+                p3 = qpts[idx + 1] if idx == len(qpts) - 2 else _lerp_pt(q, qpts[idx + 1], 0.5)
+                c1 = _lerp_pt(pos, q, 2.0 / 3.0)
+                c2 = _lerp_pt(p3, q, 2.0 / 3.0)
+                if math.hypot(p3[0] - pos[0], p3[1] - pos[1]) > 1e-4:
+                    cur.append((pos, c1, c2, p3))
+                    pos = p3
+        elif op == "closePath":
+            if start is not None and pos is not None and math.hypot(start[0] - pos[0], start[1] - pos[1]) > 1e-4:
+                cur.append(make_line(pos, start))
+            if cur:
+                contours.append(cur)
+            cur, start, pos = [], None, None
+    if cur:
+        contours.append(cur)
+    return [c for c in contours if len(c) >= 2]
+
+
+def _bezier_corners(segs: list[tuple], angle_thresh: float = 0.45) -> list[tuple[int, float]]:
+    """Detect sharp on-curve corners where incoming and outgoing segment tangents turn > angle_thresh."""
+    n = len(segs)
+    corners = []
+    for i in range(n):
+        prev_s = segs[(i - 1) % n]
+        next_s = segs[i]
+        # Incoming tangent at prev_s end
+        v_in = _vsub(prev_s[3], prev_s[2])
+        if math.hypot(*v_in) < 1e-4:
+            v_in = _vsub(prev_s[3], prev_s[0])
+        # Outgoing tangent at next_s start
+        v_out = _vsub(next_s[1], next_s[0])
+        if math.hypot(*v_out) < 1e-4:
+            v_out = _vsub(next_s[3], next_s[0])
+        li, lo = math.hypot(*v_in), math.hypot(*v_out)
+        if li > 1e-6 and lo > 1e-6:
+            cos_a = max(-1.0, min(1.0, (v_in[0] * v_out[0] + v_in[1] * v_out[1]) / (li * lo)))
+            ang = math.acos(cos_a)
+            if ang >= angle_thresh:
+                corners.append((i, ang))
+    return corners
+
+
+def _slice_cubic(seg, t0: float, t1: float):
+    """Exact de Casteljau sub-curve of cubic seg over [t0, t1] subset [0, 1]."""
+    if t0 <= 1e-6 and t1 >= 1.0 - 1e-6:
+        return seg
+    cur = seg
+    if t0 > 1e-6:
+        _, cur = _split_cubic(cur, t0)
+        t1 = (t1 - t0) / (1.0 - t0)
+    if t1 < 1.0 - 1e-6:
+        cur, _ = _split_cubic(cur, t1)
+    return cur
+
+
+def _resample_span_at_breaks(span: list[tuple], breaks: list[float]) -> list[tuple]:
+    """Slice a native cubic span at exact normalized arc-length intervals [breaks[k], breaks[k+1]]."""
+    lens = [_seg_len(s) for s in span]
+    total = max(sum(lens), 1e-6)
+    cum = [0.0]
+    for l in lens:
+        cum.append(cum[-1] + l / total)
+    cum[-1] = 1.0
+
+    def seg_at(u: float) -> tuple[int, float]:
+        for idx in range(len(span)):
+            if u <= cum[idx + 1] + 1e-9 or idx == len(span) - 1:
+                du = max(cum[idx + 1] - cum[idx], 1e-9)
+                return idx, max(0.0, min(1.0, (u - cum[idx]) / du))
+        return len(span) - 1, 1.0
+
+    out = []
+    for k in range(len(breaks) - 1):
+        u0, u1 = breaks[k], breaks[k + 1]
+        if u1 - u0 < 1e-6:
+            continue
+        i0, t0 = seg_at(u0)
+        i1, t1 = seg_at(u1)
+        if i0 == i1:
+            out.append(_slice_cubic(span[i0], t0, t1))
+        else:
+            # Interval crosses an original breakpoint; take the dominant sub-segment
+            # (breaks already includes all original breakpoints, so this only happens if snapped within 0.02)
+            out.append(_slice_cubic(span[i0], t0, 1.0) if (cum[i0 + 1] - u0) >= (u1 - cum[i1]) else _slice_cubic(span[i1], 0.0, t1))
+    return out
+
+
+def _morph_bezier_span(span_a: list[tuple], span_b: list[tuple], alpha: float) -> list[tuple]:
+    """Slice two native cubic spans at their exact union of normalized arc-length breakpoints and interpolate."""
+    def norm_breaks(sp):
+        ls = [_seg_len(s) for s in sp]
+        tot = sum(ls)
+        if tot < 1e-6:
+            return []
+        c, acc = [], 0.0
+        for l in ls[:-1]:
+            acc += l / tot
+            c.append(acc)
+        return c
+
+    merged = sorted([0.0] + norm_breaks(span_a) + norm_breaks(span_b) + [1.0])
+    breaks = [0.0]
+    for u in merged[1:-1]:
+        if u - breaks[-1] > 0.015 and 1.0 - u > 0.015:
+            breaks.append(u)
+    breaks.append(1.0)
+
+    sub_a = _resample_span_at_breaks(span_a, breaks)
+    sub_b = _resample_span_at_breaks(span_b, breaks)
+
+    out = []
+    for sa, sb in zip(sub_a, sub_b):
+        out.append(tuple(_lerp_pt(sa[k], sb[k], alpha) for k in range(4)))
+    return out
+
+
+def morph_bezier_contour(segs_a: list[tuple], segs_b: list[tuple], alpha: float) -> list[tuple]:
+    """Native Bezier-segment contour morphing with corner-anchored DP alignment and de Casteljau subdivision."""
+    if (_bezier_signed_area(segs_a) > 0) != (_bezier_signed_area(segs_b) > 0):
+        segs_b = _reverse_bezier_contour(segs_b)
+
+    # Rotate segs_b so start vertex is closest to segs_a[0][0]
+    p0_a = segs_a[0][0]
+    best_rot = min(range(len(segs_b)), key=lambda i: math.hypot(segs_b[i][0][0] - p0_a[0], segs_b[i][0][1] - p0_a[1]))
+    segs_b = segs_b[best_rot:] + segs_b[:best_rot]
+
+    ca = _bezier_corners(segs_a)
+    cb = _bezier_corners(segs_b)
+
+    if len(ca) >= 2 and len(cb) >= 2:
+        # Align corners by circular Needleman-Wunsch DP on normalized arc-length position + angle
+        def seg_cum_u(segs):
+            ls = [_seg_len(s) for s in segs]
+            tot = max(sum(ls), 1e-6)
+            u, acc = [0.0], 0.0
+            for l in ls[:-1]:
+                acc += l / tot
+                u.append(acc)
+            return u
+
+        ua = seg_cum_u(segs_a)
+        ub = seg_cum_u(segs_b)
+        na, nb = len(ca), len(cb)
+        best_score, best_pairs = float("inf"), []
+        gap = 0.25
+        for shift in range(nb):
+            cb_rot = cb[shift:] + cb[:shift]
+            u0_b = ub[cb_rot[0][0]]
+            u0_a = ua[ca[0][0]]
+            dp = [[0.0] * (nb + 1) for _ in range(na + 1)]
+            bt = [[0] * (nb + 1) for _ in range(na + 1)]
+            for i in range(1, na + 1):
+                dp[i][0] = i * gap; bt[i][0] = 1
+            for j in range(1, nb + 1):
+                dp[0][j] = j * gap; bt[0][j] = 2
+            for i in range(1, na + 1):
+                ia, aa = ca[i - 1]
+                pos_a = (ua[ia] - u0_a) % 1.0
+                for j in range(1, nb + 1):
+                    ib, ab = cb_rot[j - 1]
+                    pos_b = (ub[ib] - u0_b) % 1.0
+                    d_pos = abs(pos_a - pos_b)
+                    d_pos = min(d_pos, 1.0 - d_pos)
+                    cost = d_pos * 2.0 + abs(aa - ab) * 0.2
+                    m = dp[i - 1][j - 1] + cost
+                    d1 = dp[i - 1][j] + gap
+                    d2 = dp[i][j - 1] + gap
+                    if m <= d1 and m <= d2:
+                        dp[i][j] = m; bt[i][j] = 0
+                    elif d1 <= d2:
+                        dp[i][j] = d1; bt[i][j] = 1
+                    else:
+                        dp[i][j] = d2; bt[i][j] = 2
+            if dp[na][nb] < best_score:
+                best_score = dp[na][nb]
+                pairs = []
+                i, j = na, nb
+                while i > 0 or j > 0:
+                    if bt[i][j] == 0:
+                        pairs.append((ca[i - 1][0], cb_rot[j - 1][0]))
+                        i -= 1; j -= 1
+                    elif bt[i][j] == 1:
+                        i -= 1
+                    else:
+                        j -= 1
+                pairs.reverse()
+                best_pairs = pairs
+
+        if len(best_pairs) >= 2:
+            out = []
+            k_n = len(best_pairs)
+            for k in range(k_n):
+                a0, b0 = best_pairs[k]
+                a1, b1 = best_pairs[(k + 1) % k_n]
+                sp_a = segs_a[a0:a1] if a1 > a0 else segs_a[a0:] + segs_a[:a1]
+                sp_b = segs_b[b0:b1] if b1 > b0 else segs_b[b0:] + segs_b[:b1]
+                if not sp_a or not sp_b:
+                    continue
+                out.extend(_morph_bezier_span(sp_a, sp_b, alpha))
+            min_area = min(abs(_bezier_signed_area(segs_a)), abs(_bezier_signed_area(segs_b)))
+            if out and abs(_bezier_signed_area(out)) >= 0.65 * min_area:
+                return out
+
+    return _morph_bezier_span(segs_a, segs_b, alpha)
+
+
+def bezier_contours_to_svg_path(contours: list[list[tuple]], baseline: int) -> str:
+    """Convert native Y-up cubic Bezier contours directly to clean Y-down SVG L/C paths."""
+    parts = []
+    for segs in contours:
+        if not segs:
+            continue
+        p0 = segs[0][0]
+        cmd = [f"M{round(p0[0], 1)},{round(baseline - p0[1], 1)}"]
+        for s in segs:
+            a, b, c, d = s
+            if _seg_is_line(s, tol=0.5):
+                cmd.append(f"L{round(d[0], 1)},{round(baseline - d[1], 1)}")
+            else:
+                cmd.append(
+                    f"C{round(b[0], 1)},{round(baseline - b[1], 1)} "
+                    f"{round(c[0], 1)},{round(baseline - c[1], 1)} "
+                    f"{round(d[0], 1)},{round(baseline - d[1], 1)}"
+                )
+        cmd.append("Z")
+        parts.append("".join(cmd))
+    return " ".join(parts)
+
+
+def _bezier_contour_self_intersects(segs: list[tuple]) -> bool:
+    """Return True if a native cubic Bezier contour has any strict self-intersection."""
+    pts = []
+    for s in segs:
+        p0, p1, p2, p3 = s
+        n_sub = 1 if _seg_is_line(s, tol=0.5) else 4
+        for k in range(n_sub):
+            t = k / n_sub
+            mt = 1.0 - t
+            pt = (
+                mt**3 * p0[0] + 3 * mt**2 * t * p1[0] + 3 * mt * t**2 * p2[0] + t**3 * p3[0],
+                mt**3 * p0[1] + 3 * mt**2 * t * p1[1] + 3 * mt * t**2 * p2[1] + t**3 * p3[1],
+            )
+            if not pts or math.hypot(pt[0] - pts[-1][0], pt[1] - pts[-1][1]) > 0.5:
+                pts.append(pt)
+    if len(pts) > 1 and math.hypot(pts[0][0] - pts[-1][0], pts[0][1] - pts[-1][1]) <= 0.5:
+        pts.pop()
+    m = len(pts)
+    if m < 4:
+        return False
+
+    def orient(a, b, c):
+        return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+    for i in range(m):
+        a, b = pts[i], pts[(i + 1) % m]
+        for j in range(i + 2, m):
+            if i == 0 and j == m - 1:
+                continue
+            c, d = pts[j], pts[(j + 1) % m]
+            if (orient(a, b, c) * orient(a, b, d) < -1e-6) and (orient(c, d, a) * orient(c, d, b) < -1e-6):
+                return True
+    return False
+
+
+def style_transfer_bezier_contours(
+    ba: list[list[tuple]],
+    bb: list[list[tuple]],
+    alpha: float = 0.5,
+) -> list[list[tuple]]:
+    """Native L/C style transfer: apply smooth 2D proportion warp directly to source Bezier control points."""
+    all_a = [s[0] for c in ba for s in c]
+    all_b = [s[0] for c in bb for s in c]
+    ax0, ax1 = min(p[0] for p in all_a), max(p[0] for p in all_a)
+    ay0, ay1 = min(p[1] for p in all_a), max(p[1] for p in all_a)
+    bx0, bx1 = min(p[0] for p in all_b), max(p[0] for p in all_b)
+    by0, by1 = min(p[1] for p in all_b), max(p[1] for p in all_b)
+    aw, ah = max(ax1 - ax0, 1e-6), max(ay1 - ay0, 1e-6)
+    bw, bh = max(bx1 - bx0, 1e-6), max(by1 - by0, 1e-6)
+    acx = 0.5 * (ax0 + ax1)
+    ay_mid = sum(p[1] for p in all_a) / len(all_a)
+    by_mid = sum(p[1] for p in all_b) / len(all_b)
+
+    sx = 1.0 + max(-0.15, min(0.15, (bw / aw - 1.0) * alpha * 0.35))
+    ty0 = ay0 if abs(ay0) < 25.0 else ay0 + (by0 - ay0) * alpha * 0.4
+    ty1 = ay1 + (by1 - ay1) * alpha * 0.4
+    t_mid_shift = max(-0.08 * ah, min(0.08 * ah, (by_mid - ay_mid) * alpha * 0.4))
+
+    def warp_pt(p):
+        x, y = p
+        nx = acx + (x - acx) * sx
+        u = (y - ay0) / ah
+        ny = ty0 + u * (ty1 - ty0) + 4.0 * u * (1.0 - u) * t_mid_shift
+        return (nx, ny)
+
+    return [[tuple(warp_pt(p) for p in s) for s in c] for c in ba]
+
+
+def style_transfer_extend_bezier(
+    root: ET.Element,
+    transform=Identity,
+    baseline: int = 800,
+    sx: float = 1.0,
+    tension: float = 1.0,
+) -> tuple[str, tuple[float, float, float, float] | None]:
+    """Native L/C style transfer for extended fallback glyphs: horizontal proportion + cubic handle tension."""
+    contours = svg_to_bezier_contours(root, transform)
+    if not contours:
+        return "", None
+    all_pts = [p for c in contours for s in c for p in (s[0], s[3])]
+    x0, x1 = min(p[0] for p in all_pts), max(p[0] for p in all_pts)
+    cx = 0.5 * (x0 + x1)
+
+    out = []
+    for c in contours:
+        nc = []
+        for s in c:
+            p0, p1, p2, p3 = (
+                (cx + (p[0] - cx) * sx, p[1]) for p in s
+            )
+            if tension != 1.0 and not _seg_is_line((p0, p1, p2, p3), tol=0.5):
+                p1 = (p0[0] + (p1[0] - p0[0]) * tension, p0[1] + (p1[1] - p0[1]) * tension)
+                p2 = (p3[0] + (p2[0] - p3[0]) * tension, p3[1] + (p2[1] - p3[1]) * tension)
+            nc.append((p0, p1, p2, p3))
+        out.append(nc)
+
+    xs = [p[0] for c in out for s in c for p in (s[0], s[3])]
+    ys = [p[1] for c in out for s in c for p in (s[0], s[3])]
+    bounds = (min(xs), min(ys), max(xs), max(ys))
+    return bezier_contours_to_svg_path(out, baseline), bounds
+
+
 def morph_contours(
     root_a: ET.Element,
     root_b: ET.Element,
     transform_b=Identity,
     alpha: float = 0.5,
     n_samples: int = 144,
-) -> list[list[tuple[float, float]]] | None:
-    """Overlay root_b onto root_a and compute corner-anchored, stroke-equalized, faired midpoint contours."""
+) -> list[list] | None:
+    """Overlay root_b onto root_a and compute native Bezier-segment midpoint contours (with topology & self-intersection guards)."""
     ca = svg_to_contours(root_a)
     cb = svg_to_contours(root_b, transform_b)
     if not ca or not cb or len(ca) != len(cb):
         return None
 
-    # Automatic topology-mismatch guard: use style transfer instead of shape morphing
-    if _max_chamfer_distance(ca, cb) > 0.09:
-        return style_transfer_contours(ca, cb, alpha=alpha, n_samples=n_samples)
+    # Native Bezier-segment extraction (preserves exact L and C segments without polyline resampling)
+    ba = svg_to_bezier_contours(root_a)
+    bb = svg_to_bezier_contours(root_b, transform_b)
+    if not ba or not bb or len(ba) != len(bb):
+        return None
 
-    all_a = [p for c in ca for p in c]
-    all_b = [p for c in cb for p in c]
+    # Automatic topology-mismatch guard: use native L/C style transfer instead of shape morphing
+    if _max_chamfer_distance(ca, cb) > 0.09:
+        return style_transfer_bezier_contours(ba, bb, alpha=alpha)
+
+    all_a = [s[0] for c in ba for s in c]
+    all_b = [s[0] for c in bb for s in c]
     ax = (min(p[0] for p in all_a) + max(p[0] for p in all_a)) * 0.5
     bx = (min(p[0] for p in all_b) + max(p[0] for p in all_b)) * 0.5
     dx = ax - bx
-    cb = [[(p[0] + dx, p[1]) for p in c] for c in cb]
+    bb_shifted = [[tuple((p[0] + dx, p[1]) for p in s) for s in c] for c in bb]
 
-    def centroid(c):
-        return (sum(p[0] for p in c) / len(c), sum(p[1] for p in c) / len(c))
+    def b_centroid(c):
+        return (sum(s[0][0] for s in c) / len(c), sum(s[0][1] for s in c) / len(c))
 
-    outer_sign_a = signed_area(max(ca, key=lambda c: abs(signed_area(c)))) > 0
-    outer_sign_b = signed_area(max(cb, key=lambda c: abs(signed_area(c)))) > 0
+    outer_sign_a = _bezier_signed_area(max(ba, key=lambda c: abs(_bezier_signed_area(c)))) > 0
+    outer_sign_b = _bezier_signed_area(max(bb_shifted, key=lambda c: abs(_bezier_signed_area(c)))) > 0
 
     used_b: set[int] = set()
-    pairs = []
-    for a in ca:
-        is_outer_a = (signed_area(a) > 0) == outer_sign_a
-        cx_a, cy_a = centroid(a)
+    morphed = []
+    for a in ba:
+        is_outer_a = (_bezier_signed_area(a) > 0) == outer_sign_a
+        cx_a, cy_a = b_centroid(a)
         best_j, best_cost = None, float("inf")
-        for j, b in enumerate(cb):
+        for j, b in enumerate(bb_shifted):
             if j in used_b:
                 continue
-            is_outer_b = (signed_area(b) > 0) == outer_sign_b
-            cx_b, cy_b = centroid(b)
+            is_outer_b = (_bezier_signed_area(b) > 0) == outer_sign_b
+            cx_b, cy_b = b_centroid(b)
             cost = (cx_a - cx_b) ** 2 + (cy_a - cy_b) ** 2 + (0 if is_outer_a == is_outer_b else 1e12)
             if cost < best_cost:
                 best_cost, best_j = cost, j
         used_b.add(best_j)
-        pairs.append((a, cb[best_j]))
-
-    morphed = [morph_pair_smart(a, b, alpha, n_samples) for a, b in pairs]
-    equalized = equalize_stroke_weight(morphed, [resample_contour(a, n_samples) for a, _ in pairs], strength=0.45)
-    return [taubin_fair_contour(c, iters=3) for c in equalized]
+        mc = morph_bezier_contour(a, bb_shifted[best_j], alpha)
+        # Self-intersection & area-collapse guard per contour
+        sa = abs(_bezier_signed_area(a))
+        oa = abs(_bezier_signed_area(mc))
+        if _bezier_contour_self_intersects(mc) or (sa > 500 and (oa < 0.60 * sa or oa > 1.65 * sa)):
+            return style_transfer_bezier_contours(ba, bb, alpha=alpha)
+        morphed.append(mc)
+    return morphed
 
 
 # --- Schneider's Cubic Bezier Curve Fitter ---
@@ -898,8 +1328,10 @@ def _fit_cubic_span(
     return left + right
 
 
-def contours_to_svg_path(contours: list[list[tuple[float, float]]], baseline: int) -> str:
-    """Convert Y-up font contours to a clean Y-down SVG path using snapped L and fitted cubic C curves."""
+def contours_to_svg_path(contours: list[list], baseline: int) -> str:
+    """Convert Y-up font contours (native Bezier segments or polylines) to a clean Y-down SVG path."""
+    if contours and contours[0] and len(contours[0][0]) == 4:
+        return bezier_contours_to_svg_path(contours, baseline)
     tol = 1.5 if baseline <= 1000 else 3.0
     parts = []
     for c in contours:

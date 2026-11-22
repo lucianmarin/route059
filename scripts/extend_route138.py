@@ -15,7 +15,7 @@ from fontTools.pens.boundsPen import BoundsPen
 from fontTools.misc.transform import Identity
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from morph_svg import load_svg_dir
+from morph_svg import load_svg_dir, style_transfer_extend_bezier
 
 ROOT = Path(__file__).resolve().parent.parent
 SVG_ROOT = ROOT / "svg"
@@ -126,17 +126,26 @@ def main():
                 write_svg(r138_dir / f"U+{cp:04X}_{gn}.svg", gn, cp, adv, d, f"r138-composed/{style_key}")
                 composed += 1
             else:
-                _, bounds = transform_svg_path(h_root, hack_t)
+                is_box = (0x2500 <= cp <= 0x259F) or (0xE0A0 <= cp <= 0xE0D4)
+                sx = 1.0 if is_box else 0.94
+                tension = 1.0 if is_box else 1.04
+                _, bounds = style_transfer_extend_bezier(h_root, hack_t, baseline=BASELINE, sx=sx, tension=tension)
                 if bounds:
                     ink_w = bounds[2] - bounds[0]
-                    sb = 45
+                    sb = 0 if is_box else 45
                     adv = round(ink_w + 2 * sb)
                     dx = sb - bounds[0]
-                    d, _ = transform_svg_path(h_root, Identity.translate(dx, 0).scale(hack_scale, hack_scale))
+                    d, _ = style_transfer_extend_bezier(
+                        h_root,
+                        Identity.translate(dx, 0).scale(hack_scale, hack_scale),
+                        baseline=BASELINE,
+                        sx=sx,
+                        tension=tension,
+                    )
                 else:
                     adv = round(int(h_root.attrib["data-advance"]) * hack_scale)
                     d = ""
-                write_svg(r138_dir / f"U+{cp:04X}_{gn}.svg", gn, cp, adv, d, f"hack/{style_key}")
+                write_svg(r138_dir / f"U+{cp:04X}_{gn}.svg", gn, cp, adv, d, f"hack-style-transferred/{style_key}")
                 scaled += 1
 
         final_count = len(load_svg_dir(r138_dir))
