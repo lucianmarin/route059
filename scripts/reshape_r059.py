@@ -2,7 +2,7 @@
 # /// script
 # dependencies = ["fonttools"]
 # ///
-"""Step 3: Reshape svg/hack/ via Bezier midpoint morphing with svg/route138/ -> svg/route038/."""
+"""Step 3: Reshape svg/hack/ via Bezier morphing with Route 159 -> svg/route059/ (limited) and svg/route059-ext/ (extended)."""
 
 import math
 import shutil
@@ -89,34 +89,47 @@ def main():
 
     for style_key in UPRIGHT_STYLES:
         hack_map = load_svg_dir(SVG_ROOT / "hack" / style_key)
-        r138_map = load_svg_dir(SVG_ROOT / "route138" / style_key)
+        r159_lim_map = load_svg_dir(SVG_ROOT / "route159" / style_key)
+        r159_ext_map = load_svg_dir(SVG_ROOT / "route159-ext" / style_key)
 
-        out_dir = SVG_ROOT / "route038" / style_key
-        if out_dir.exists():
-            shutil.rmtree(out_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
+        out_lim_dir = SVG_ROOT / "route059" / style_key
+        out_ext_dir = SVG_ROOT / "route059-ext" / style_key
+        for d_path in (out_lim_dir, out_ext_dir):
+            if d_path.exists():
+                shutil.rmtree(d_path)
+            d_path.mkdir(parents=True, exist_ok=True)
 
-        count = 0
+        lim_count = 0
+        ext_count = 0
         morphed_count = 0
         for cp, (_, h_root) in sorted(hack_map.items()):
             gn = h_root.attrib["data-glyph"]
             adv = int(h_root.attrib["data-advance"])
+            in_limited = cp in r159_lim_map
 
-            if cp in r138_map and not in_ranges(cp, MONO_ONLY_HACK_RANGES):
+            if cp in r159_ext_map and not in_ranges(cp, MONO_ONLY_HACK_RANGES):
                 s = scale_lower if is_lowercase_cp(cp) else scale_upper
-                morphed = morph_contours(h_root, r138_map[cp][1], Identity.scale(s, s), alpha=MORPH_ALPHA)
+                morphed = morph_contours(h_root, r159_ext_map[cp][1], Identity.scale(s, s), alpha=MORPH_ALPHA)
                 if morphed is not None:
                     d = contours_to_svg_path(morphed, SVG_BASELINE)
-                    write_svg(out_dir / f"U+{cp:04X}_{gn}.svg", gn, cp, adv, d, f"morph(hack,r138,{MORPH_ALPHA})")
-                    count += 1
+                    src_tag = f"morph(hack,r159,{MORPH_ALPHA})"
+                    write_svg(out_ext_dir / f"U+{cp:04X}_{gn}.svg", gn, cp, adv, d, src_tag)
+                    ext_count += 1
                     morphed_count += 1
+                    if in_limited:
+                        write_svg(out_lim_dir / f"U+{cp:04X}_{gn}.svg", gn, cp, adv, d, src_tag)
+                        lim_count += 1
                     continue
 
             d = rebaseline_svg_path(h_root)
-            write_svg(out_dir / f"U+{cp:04X}_{gn}.svg", gn, cp, adv, d, f"hack/{style_key}")
-            count += 1
+            write_svg(out_ext_dir / f"U+{cp:04X}_{gn}.svg", gn, cp, adv, d, f"hack/{style_key}")
+            ext_count += 1
+            if in_limited:
+                write_svg(out_lim_dir / f"U+{cp:04X}_{gn}.svg", gn, cp, adv, d, f"hack/{style_key}")
+                lim_count += 1
 
-        print(f"Reshaped {count} SVGs ({morphed_count} morphed with Route 138) -> {out_dir.relative_to(ROOT)}")
+        print(f"Reshaped {lim_count} SVGs -> {out_lim_dir.relative_to(ROOT)}")
+        print(f"Reshaped {ext_count} SVGs ({morphed_count} morphed with Route 159) -> {out_ext_dir.relative_to(ROOT)}")
 
     # Derive Italic and BoldItalic from morphed Regular and Bold via oblique shear
     # (keeping Box Drawing, Block Elements, and Powerline glyphs upright)
@@ -125,23 +138,24 @@ def main():
         .skew(math.radians(ITALIC_ANGLE), 0)
         .translate(0, -ITALIC_PIVOT_Y)
     )
-    for src_style, dst_style in ITALIC_PAIRS:
-        src_map = load_svg_dir(SVG_ROOT / "route038" / src_style)
-        out_dir = SVG_ROOT / "route038" / dst_style
-        if out_dir.exists():
-            shutil.rmtree(out_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        slanted = 0
-        for cp, (src_path, root) in sorted(src_map.items()):
-            gn = root.attrib["data-glyph"]
-            adv = int(root.attrib["data-advance"])
-            if in_ranges(cp, MONO_ONLY_HACK_RANGES):
-                shutil.copy2(src_path, out_dir / src_path.name)
-            else:
-                d = transform_svg_path(root, shear_t)
-                write_svg(out_dir / f"U+{cp:04X}_{gn}.svg", gn, cp, adv, d, f"oblique({src_style},{ITALIC_ANGLE}deg)")
-                slanted += 1
-        print(f"Derived {len(src_map)} SVGs ({slanted} oblique {ITALIC_ANGLE}°, {len(src_map) - slanted} upright box/powerline) -> {out_dir.relative_to(ROOT)}")
+    for family_dir in ("route059", "route059-ext"):
+        for src_style, dst_style in ITALIC_PAIRS:
+            src_map = load_svg_dir(SVG_ROOT / family_dir / src_style)
+            out_dir = SVG_ROOT / family_dir / dst_style
+            if out_dir.exists():
+                shutil.rmtree(out_dir)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            slanted = 0
+            for cp, (src_path, root) in sorted(src_map.items()):
+                gn = root.attrib["data-glyph"]
+                adv = int(root.attrib["data-advance"])
+                if in_ranges(cp, MONO_ONLY_HACK_RANGES):
+                    shutil.copy2(src_path, out_dir / src_path.name)
+                else:
+                    d = transform_svg_path(root, shear_t)
+                    write_svg(out_dir / f"U+{cp:04X}_{gn}.svg", gn, cp, adv, d, f"oblique({src_style},{ITALIC_ANGLE}deg)")
+                    slanted += 1
+            print(f"Derived {len(src_map)} SVGs ({slanted} oblique {ITALIC_ANGLE}°, {len(src_map) - slanted} upright box/powerline) -> {out_dir.relative_to(ROOT)}")
 
 
 if __name__ == "__main__":

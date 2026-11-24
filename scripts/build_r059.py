@@ -2,7 +2,7 @@
 # /// script
 # dependencies = ["fonttools"]
 # ///
-"""Step 2b: Build Route 038 (monospace) OTF fonts directly from svg/route038/<Style>/*.svg."""
+"""Step 4b: Build Route 059 (limited) and Route 059 Extended (monospace) OTF fonts from SVGs."""
 
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -14,8 +14,13 @@ from fontTools.pens.boundsPen import BoundsPen
 from fontTools.misc.transform import Identity
 
 ROOT = Path(__file__).resolve().parent.parent
-SVG_R038 = ROOT / "svg" / "route038"
+SVG_ROOT = ROOT / "svg"
 DIST = ROOT / "dist"
+
+VARIANTS = [
+    ("route059", "Route 059", "Route059", "R059"),
+    ("route059-ext", "Route 059 Extended", "Route059Ext", "R059E"),
+]
 
 STYLES = [
     ("Regular", "Regular", False, False),
@@ -29,11 +34,20 @@ ADVANCE = 1233
 BASELINE = 1600
 
 
-def build_style(style_key: str, style_label: str, is_bold: bool, is_italic: bool) -> Path:
-    svg_dir = SVG_R038 / style_key
+def build_style(
+    svg_family: str,
+    family_name: str,
+    ps_prefix: str,
+    uid_prefix: str,
+    style_key: str,
+    style_label: str,
+    is_bold: bool,
+    is_italic: bool,
+) -> Path:
+    svg_dir = SVG_ROOT / svg_family / style_key
     svg_files = sorted(svg_dir.glob("*.svg"))
     if not svg_files:
-        raise FileNotFoundError(f"No SVGs found in {svg_dir}; run scripts/export_r038_svg.py first.")
+        raise FileNotFoundError(f"No SVGs found in {svg_dir}; run scripts/reshape_r059.py first.")
 
     glyph_order = [".notdef"]
     cmap = {}
@@ -88,15 +102,15 @@ def build_style(style_key: str, style_label: str, is_bold: bool, is_italic: bool
         charstrings[gn] = t2_pen.getCharString()
         metrics[gn] = (advance, lsb)
 
-    ps_name = f"Route038-{style_key}"
-    full_name = f"Route 038 {style_label}" if style_label != "Regular" else "Route 038"
+    ps_name = f"{ps_prefix}-{style_key}"
+    full_name = f"{family_name} {style_label}" if style_label != "Regular" else family_name
 
     fb = FontBuilder(UPM, isTTF=False)
     fb.setupGlyphOrder(glyph_order)
     fb.setupCharacterMap(cmap)
     fb.setupCFF(
         psName=ps_name,
-        fontInfo={"FullName": full_name, "FamilyName": "Route 038"},
+        fontInfo={"FullName": full_name, "FamilyName": family_name},
         charStringsDict=charstrings,
         privateDict={},
     )
@@ -104,9 +118,9 @@ def build_style(style_key: str, style_label: str, is_bold: bool, is_italic: bool
     fb.setupHorizontalHeader(ascent=1901, descent=-483, lineGap=0)
     fb.setupNameTable(
         {
-            "familyName": "Route 038",
+            "familyName": family_name,
             "styleName": style_label,
-            "uniqueFontIdentifier": f"1.000;R038;{ps_name}",
+            "uniqueFontIdentifier": f"1.000;{uid_prefix};{ps_name}",
             "fullName": full_name,
             "version": "Version 1.000",
             "psName": ps_name,
@@ -140,7 +154,7 @@ def build_style(style_key: str, style_label: str, is_bold: bool, is_italic: bool
     fb.font["OS/2"].panose.bProportion = 9  # Monospaced
     fb.setupPost(
         isFixedPitch=1,
-        italicAngle=-11.0 if is_italic else 0.0,
+        italicAngle=-12.0 if is_italic else 0.0,
     )
 
     DIST.mkdir(parents=True, exist_ok=True)
@@ -150,9 +164,10 @@ def build_style(style_key: str, style_label: str, is_bold: bool, is_italic: bool
 
 
 def main():
-    for style_key, style_label, is_bold, is_italic in STYLES:
-        out = build_style(style_key, style_label, is_bold, is_italic)
-        print(f"Built {out.name} from svg/route038/{style_key}/")
+    for svg_family, family_name, ps_prefix, uid_prefix in VARIANTS:
+        for style_key, style_label, is_bold, is_italic in STYLES:
+            out = build_style(svg_family, family_name, ps_prefix, uid_prefix, style_key, style_label, is_bold, is_italic)
+            print(f"Built {out.name} from svg/{svg_family}/{style_key}/")
 
 
 if __name__ == "__main__":

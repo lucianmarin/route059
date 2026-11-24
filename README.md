@@ -1,52 +1,39 @@
-# Route 138 & Route 038
+# Route 159 Extended & Route 059
 
-Font family specifications and design tracking for **Route 138** (proportional sans-serif) and **Route 038** (monospace).
+Font family specifications and build pipeline for **Route 159 Extended** (proportional sans-serif) and **Route 059** (monospace, both limited and extended glyph sets).
 
 ## Inspiration Sources (`inspiration/`)
 
 | Font | Format | UPM | Glyphs (cmap) | Styles Available | x-Height | Cap Height | Ascent / Descent (`hhea`) |
-| --- | --- | ---: | ---: | --- | ---: | ---: | --- |
-| **Route 159** | OTF (CFF) | 1000 | 346 (334) | Light, Regular, Bold | 520 | 740 | 970 / -230 |
-| **Vegur** | OTF / SFD | 1000 | 215 (214) | Light, Regular, Bold | 478 | 688 | 965 / -235 |
+| --- | --- | ---: | ---: | --- | ---: | ---: | ---: |
+| **Route 159** | OTF (CFF) | 1000 | 346 (334) | Regular, Bold | 520 | 740 | 970 / -230 |
 | **Hack** | TTF | 2048 | 1573 (1548) | Regular, Bold | 1120 (547 @ 1000) | 1493 (729 @ 1000) | 1901 / -483 |
 
 ---
 
-## Route 138 (Sans-Serif)
+## Route 159 Extended (Sans-Serif)
 
-- **Role:** Proportional sans-serif typeface.
-- **Primary inspiration:** Route 159.
-- **Distinctive character:** Incorporates the best letter shapes from **Vegur** (the earlier predecessor to Route 159) so Route 138 stands apart from Route 159 while retaining its humanist/geometric clarity.
-- **UPM:** 1000 (matching Route 159 & Vegur)
-- **Vertical metrics (target, based on Route 159):**
+- **Role:** Extended proportional sans-serif based on **Route 159**, expanded to cover Hack's Latin + symbol glyph set.
+- **UPM:** 1000 (matching Route 159)
+- **Vertical metrics (matching Route 159):**
   - `hhea` Ascent / Descent / LineGap: `970` / `-230` / `0`
   - `OS/2` TypoAscender / TypoDescender / TypoLineGap: `770` / `-230` / `100`
   - `OS/2` WinAscent / WinDescent: `970` / `230`
   - Cap Height: `740`
   - x-Height: `520`
-- **Glyph set:** 565 glyphs (553 Unicode codepoints) — Route 159's 346-glyph core plus Latin-1/Extended-A completions, print punctuation, currency, fractions, superscripts/subscripts, core math operators, and core arrows from Hack.
-- **Styles:** Regular, Bold, Italic, Bold Italic (4 styles).
-- **Output format:** OTF (CFF) in `dist/`.
-- **Vegur-inspired letterforms adopted** (scaled/harmonized to Route 159's metrics and italic angle):
-  - `g` (single-story)
-  - `J` (descending tail)
-  - `Q` (curved tail)
-  - `R` (curved leg)
-  - `K`, `k` (humanist join)
-  - `a` (softer bowl)
-  - `t` (curved foot)
-  - `y` (curved tail)
-  - `1`, `4` (humanist numerals)
-  - `&` (humanist ampersand)
-  - `?` (fluid curve)
+- **Glyph set:** Route 159's original 334 Unicode glyphs plus accented Latin composed from Route 159's own base + accent glyphs and remaining symbols/terminal glyphs style-transferred from Hack.
+- **Styles:** Regular, Bold, Italic, Bold Italic (4 styles; oblique `12°` derived from upright).
+- **Output format:** OTF (CFF) in `dist/Route159Ext-*.otf`.
 
 ---
 
-## Route 038 (Monospace)
+## Route 059 & Route 059 Extended (Monospace)
 
-- **Role:** Code-editor-ready monospace companion to Route 138.
-- **Design process (Hack-first):** Built directly on **Hack**'s proven monospace foundation (preserving Hack's stroke weight, rhythm, `0O1lI` legibility, punctuation, and terminal glyphs), subsetted to ~720 usable Latin/coding/terminal glyphs, and infused with **Route 138 / Vegur's signature humanist letterforms** (`g`, `a`, `k`, `t`, `y`, `J`, `Q`, `R`, `K`, `4`, `&`, `?`) scaled to Hack's exact x-height (`1120`) and cap-height (`1493`).
-- **Exact metric compatibility with Hack:** Matches Hack's proven code-editor cell width and vertical metrics:
+- **Role:** Code-editor-ready monospace companion to Route 159, built by morphing **Hack** with **Route 159** at `α = 0.45`.
+- **Two glyph-set variants:**
+  - **Route 059 (limited):** Limited to Route 159's original 334-glyph Unicode set (`dist/Route059-*.otf`).
+  - **Route 059 Extended:** Covers Hack's full Latin + symbols + terminal glyph set, including Box Drawing, Block Elements, and Powerline PUA glyphs preserved 1:1 from Hack (`dist/Route059Ext-*.otf`).
+- **Exact metric compatibility with Hack:**
   - **UPM:** `2048` (matching Hack exactly so advance width `1233` is an exact integer without rounding drift)
   - **Advance width (all glyphs):** `1233`
   - **Cap Height:** `1493`
@@ -54,15 +41,13 @@ Font family specifications and design tracking for **Route 138** (proportional s
   - **`hhea` Ascent / Descent / LineGap:** `1901` / `-483` / `0`
   - **`OS/2` TypoAscender / TypoDescender / TypoLineGap:** `1556` / `-492` / `410`
   - **`OS/2` WinAscent / WinDescent:** `1901` / `483`
-- **Glyph set:** 732 glyphs (720 Unicode codepoints) — all 565 Route 138 glyphs plus terminal-only Box Drawing (128), Block Elements (32), and Powerline PUA (7) glyphs pulled 1:1 from Hack.
-- **Styles:** Regular, Bold, Italic, Bold Italic (4 styles, matching Hack).
-- **Output format:** OTF (CFF) in `dist/`.
+- **Styles:** Regular, Bold, Italic, Bold Italic (4 styles; `12°` oblique derived from upright, keeping Box Drawing / Block Elements / Powerline upright).
 
 ---
 
 ## Morphing & Style-Transfer Algorithm (`scripts/morph_svg.py`)
 
-Both families are generated by morphing upright **Regular** and **Bold** native Bézier (`L`/`C`) outlines (`Route 159 + Vegur → Route 138` at `α = 0.50`, and `Hack + Route 138 → Route 038` at `α = 0.45`), then deriving **Italic** and **Bold Italic** afterward via a `12°` oblique shear pivoted at half x-height (`y = 260` for Route 138, `y = 560` for Route 038, keeping Box Drawing / Block Elements / Powerline glyphs upright).
+Upright **Regular** and **Bold** native Bézier (`L`/`C`) outlines are morphed (`Hack + Route 159 → Route 059` at `α = 0.45`), then **Italic** and **Bold Italic** are derived afterward via a `12°` oblique shear pivoted at half x-height (`y = 260` for Route 159 Extended, `y = 560` for Route 059, keeping Box Drawing / Block Elements / Powerline glyphs upright).
 
 Each glyph pair goes through the following stages:
 
@@ -78,7 +63,7 @@ Each glyph pair goes through the following stages:
    - Slices matched spans at the exact union of their normalized arc-length breakpoints using de Casteljau subdivision (`_slice_cubic`), then linearly interpolates `(p0, p1, p2, p3)` directly.
    - Emits clean `L` commands for straight segments (`_seg_is_line`) and `C` commands for curves (`bezier_contours_to_svg_path`).
 5. **Per-Contour Self-Intersection & Area Guard (`_bezier_contour_self_intersects`):** Verifies every morphed contour has zero strict self-intersections and preserves area (`0.60×–1.65×` source area); any failing glyph automatically falls back to `style_transfer_bezier_contours`.
-6. **Native `L`/`C` Style Transfer for Glyph-Range Extension (`style_transfer_extend_bezier`):** When `extend_vegur.py` or `extend_route138.py` extends missing non-decomposable glyphs (symbols, math, Greek, Cyrillic), it applies horizontal proportion scaling (`sx`) and subtle cubic handle tension directly to the fallback glyph's native `L`/`C` control points (keeping Box Drawing, Block Elements, and Powerline glyphs untouched).
+6. **Native `L`/`C` Style Transfer for Glyph-Range Extension (`style_transfer_extend_bezier`):** When `extend_route159.py` extends missing non-decomposable glyphs (symbols, math, arrows), it applies horizontal proportion scaling (`sx`) and subtle cubic handle tension directly to Hack's native `L`/`C` control points (keeping Box Drawing, Block Elements, and Powerline glyphs untouched).
 
 ---
 
@@ -89,23 +74,21 @@ Run the entire 5-step pipeline with:
 ./scripts/pipeline.sh
 ```
 
-1. **Step 1 (`export_sources_svg.py`):** Export upright `Regular` and `Bold` source SVGs from `inspiration/` into `svg/{route159,vegur,hack}/`.
-2. **Step 2a (`extend_vegur.py`):** Extend `svg/vegur/` to match the exact 334-glyph set of `svg/route159/` (composing accented Latin + native `L`/`C` style transfer for remainder).
-3. **Step 2b (`reshape_r138.py`):** Morph `Route 159 + Vegur → svg/route138/{Regular,Bold}/`, then derive `12°` oblique `Italic` and `BoldItalic`.
-4. **Step 3a (`extend_route138.py`):** Extend `svg/route138/` to cover 100% of `svg/hack/` (composing accented Latin from Route 138 + native `L`/`C` style transfer from Hack, preserving Box Drawing / Block Elements / Powerline) and mirror into `Italic`/`BoldItalic`.
-5. **Step 3b (`reshape_r038.py`):** Morph `Hack + Route 138 → svg/route038/{Regular,Bold}/`, then derive `12°` oblique `Italic` and `BoldItalic` (keeping Box Drawing, Block Elements, and Powerline upright).
-6. **Step 4a / 4b (`build_r138.py`, `build_r038.py`):** Compile SVGs directly to OTF (CFF) fonts in `dist/`.
-7. **Step 5 (`build_repr_svg.py`):** Compose pure-vector specimen posters (`route138-repr.svg`, `route038-repr.svg`) directly from `sample.txt` and the generated glyph SVGs.
+1. **Step 1 (`export_sources_svg.py`):** Export upright `Regular` and `Bold` source SVGs from `inspiration/` into `svg/{route159,hack}/`.
+2. **Step 2 (`extend_route159.py`):** Copy `svg/route159/` and extend it to cover 100% of `svg/hack/` into `svg/route159-ext/{Regular,Bold}/`, then derive `12°` oblique `Italic` and `BoldItalic`.
+3. **Step 3 (`reshape_r059.py`):** Morph `Hack + Route 159` into both `svg/route059/` (limited to Route 159's original glyph set) and `svg/route059-ext/` (full Hack glyph set), then derive `12°` oblique `Italic` and `BoldItalic` (keeping Box Drawing, Block Elements, and Powerline upright).
+4. **Step 4a / 4b (`build_r159_ext.py`, `build_r059.py`):** Compile SVGs directly to OTF (CFF) fonts in `dist/`.
+5. **Step 5 (`build_repr_svg.py`):** Compose pure-vector specimen poster (`route059-repr.svg`) directly from `sample.txt` and the generated glyph SVGs.
 
 Outputs are written to `dist/`:
-- `Route138-Regular.otf`, `Route138-Bold.otf`, `Route138-Italic.otf`, `Route138-BoldItalic.otf`
-- `Route038-Regular.otf`, `Route038-Bold.otf`, `Route038-Italic.otf`, `Route038-BoldItalic.otf`
+- `Route159Ext-Regular.otf`, `Route159Ext-Bold.otf`, `Route159Ext-Italic.otf`, `Route159Ext-BoldItalic.otf`
+- `Route059-Regular.otf`, `Route059-Bold.otf`, `Route059-Italic.otf`, `Route059-BoldItalic.otf`
+- `Route059Ext-Regular.otf`, `Route059Ext-Bold.otf`, `Route059Ext-Italic.otf`, `Route059Ext-BoldItalic.otf`
 
 ---
 
 ## Status
 
-- [x] Inspect inspiration fonts and record metrics.
-- [x] Compare Route 159 vs. Vegur glyphs and select Vegur letterforms to adopt.
-- [x] Finalize target styles (4 styles each) and output format (OTF).
-- [x] Build Route 138 & Route 038 OTFs via `scripts/build.py` and visually verify.
+- [x] Inspect inspiration fonts (`Route 159`, `Hack`) and record metrics.
+- [x] Extend Route 159 to cover Hack's Latin + symbol glyph set.
+- [x] Build Route 159 Extended, Route 059 (limited), and Route 059 Extended OTFs via `./scripts/pipeline.sh`.

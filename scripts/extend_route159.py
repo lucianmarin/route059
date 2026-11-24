@@ -2,9 +2,10 @@
 # /// script
 # dependencies = ["fonttools"]
 # ///
-"""Extend svg/route159/ to match the exact glyph set of svg/hack/ before morphing Route 059."""
+"""Step 2: Extend svg/route159/ to match svg/hack/ glyph set -> svg/route159-ext/."""
 
 import math
+import shutil
 import sys
 import unicodedata
 from pathlib import Path
@@ -61,8 +62,8 @@ def transform_svg_path(root, font_transform=Identity):
     return pen.getCommands(), bp.bounds
 
 
-def try_compose_from_r138(cp: int, r138_map: dict):
-    """Compose a precomposed Latin glyph from Route 138's own base + accent if available."""
+def try_compose_from_r159(cp: int, r159_map: dict):
+    """Compose a precomposed Latin glyph from Route 159's own base + accent if available."""
     decomp = unicodedata.decomposition(chr(cp))
     if not decomp or decomp.startswith("<"):
         return None
@@ -70,14 +71,14 @@ def try_compose_from_r138(cp: int, r138_map: dict):
     if len(parts) != 2:
         return None
     base_cp, comb_cp = parts
-    if base_cp == ord("i") and 0x0131 in r138_map:
+    if base_cp == ord("i") and 0x0131 in r159_map:
         base_cp = 0x0131
     accent_cp = COMBINING_TO_SPACING.get(comb_cp, comb_cp)
-    if base_cp not in r138_map or accent_cp not in r138_map:
+    if base_cp not in r159_map or accent_cp not in r159_map:
         return None
 
-    _, base_root = r138_map[base_cp]
-    _, acc_root = r138_map[accent_cp]
+    _, base_root = r159_map[base_cp]
+    _, acc_root = r159_map[accent_cp]
     base_d, base_b = transform_svg_path(base_root)
     acc_d_raw, acc_b = transform_svg_path(acc_root)
     if not base_d or not acc_d_raw or not base_b or not acc_b:
@@ -110,20 +111,25 @@ def main():
     hack_t = Identity.scale(hack_scale, hack_scale)
 
     for style_key in UPRIGHT_STYLES:
-        r138_dir = SVG_ROOT / "route159" / style_key
-        r138_map = load_svg_dir(r138_dir)
+        src_dir = SVG_ROOT / "route159" / style_key
+        out_dir = SVG_ROOT / "route159-ext" / style_key
+        if out_dir.exists():
+            shutil.rmtree(out_dir)
+        shutil.copytree(src_dir, out_dir)
+
+        r159_map = load_svg_dir(out_dir)
         hack_map = load_svg_dir(SVG_ROOT / "hack" / style_key)
 
         composed = 0
         scaled = 0
         for cp, (_, h_root) in sorted(hack_map.items()):
-            if cp in r138_map:
+            if cp in r159_map:
                 continue
             gn = h_root.attrib["data-glyph"]
-            res = try_compose_from_r138(cp, r138_map)
+            res = try_compose_from_r159(cp, r159_map)
             if res is not None:
                 d, adv = res
-                write_svg(r138_dir / f"U+{cp:04X}_{gn}.svg", gn, cp, adv, d, f"r159-composed/{style_key}")
+                write_svg(out_dir / f"U+{cp:04X}_{gn}.svg", gn, cp, adv, d, f"r159-composed/{style_key}")
                 composed += 1
             else:
                 is_box = (0x2500 <= cp <= 0x259F) or (0xE0A0 <= cp <= 0xE0D4)
@@ -145,13 +151,13 @@ def main():
                 else:
                     adv = round(int(h_root.attrib["data-advance"]) * hack_scale)
                     d = ""
-                write_svg(r138_dir / f"U+{cp:04X}_{gn}.svg", gn, cp, adv, d, f"hack-style-transferred/{style_key}")
+                write_svg(out_dir / f"U+{cp:04X}_{gn}.svg", gn, cp, adv, d, f"hack-style-transferred/{style_key}")
                 scaled += 1
 
-        final_count = len(load_svg_dir(r138_dir))
+        final_count = len(load_svg_dir(out_dir))
         print(
-            f"Extended svg/route159/{style_key}: {final_count} glyphs "
-            f"(covers all {len(hack_map)} Hack glyphs: +{composed} composed from R138, +{scaled} scaled from Hack)"
+            f"Extended svg/route159-ext/{style_key}: {final_count} glyphs "
+            f"(covers all {len(hack_map)} Hack glyphs: +{composed} composed from R159, +{scaled} scaled from Hack)"
         )
 
     # Mirror extended upright glyphs into Italic / BoldItalic via oblique shear
@@ -161,19 +167,17 @@ def main():
         .translate(0, -ITALIC_PIVOT_Y)
     )
     for src_style, dst_style in ITALIC_PAIRS:
-        src_map = load_svg_dir(SVG_ROOT / "route159" / src_style)
-        dst_dir = SVG_ROOT / "route159" / dst_style
-        dst_map = load_svg_dir(dst_dir)
-        added = 0
+        src_map = load_svg_dir(SVG_ROOT / "route159-ext" / src_style)
+        dst_dir = SVG_ROOT / "route159-ext" / dst_style
+        if dst_dir.exists():
+            shutil.rmtree(dst_dir)
+        dst_dir.mkdir(parents=True, exist_ok=True)
         for cp, (_, root) in sorted(src_map.items()):
-            if cp in dst_map:
-                continue
             gn = root.attrib["data-glyph"]
             adv = int(root.attrib["data-advance"])
             d, _ = transform_svg_path(root, shear_t)
             write_svg(dst_dir / f"U+{cp:04X}_{gn}.svg", gn, cp, adv, d, f"oblique({src_style},{ITALIC_ANGLE}deg)")
-            added += 1
-        print(f"Extended svg/route159/{dst_style}: {len(dst_map) + added} glyphs (+{added} oblique from {src_style})")
+        print(f"Derived svg/route159-ext/{dst_style}: {len(src_map)} glyphs (oblique {ITALIC_ANGLE}° from {src_style})")
 
 
 if __name__ == "__main__":
