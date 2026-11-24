@@ -69,8 +69,6 @@ def main():
     for style in ("Regular", "Bold"):
         export_font(INSPIRATION / f"Route159-{style}.otf", SVG_ROOT / "route159" / style)
     for style in ("Regular", "Bold"):
-        export_font(INSPIRATION / f"Vegur-{style}.otf", SVG_ROOT / "vegur" / style)
-    for style in ("Regular", "Bold"):
         export_font(INSPIRATION / f"Hack-{style}.ttf", SVG_ROOT / "hack" / style, exclude_non_latin=True)
 
 

@@ -2,7 +2,7 @@
 # /// script
 # dependencies = ["fonttools"]
 # ///
-"""Extend svg/route138/ to match the exact glyph set of svg/hack/ before morphing Route 038."""
+"""Extend svg/route159/ to match the exact glyph set of svg/hack/ before morphing Route 059."""
 
 import math
 import sys
@@ -110,7 +110,7 @@ def main():
     hack_t = Identity.scale(hack_scale, hack_scale)
 
     for style_key in UPRIGHT_STYLES:
-        r138_dir = SVG_ROOT / "route138" / style_key
+        r138_dir = SVG_ROOT / "route159" / style_key
         r138_map = load_svg_dir(r138_dir)
         hack_map = load_svg_dir(SVG_ROOT / "hack" / style_key)
 
@@ -123,7 +123,7 @@ def main():
             res = try_compose_from_r138(cp, r138_map)
             if res is not None:
                 d, adv = res
-                write_svg(r138_dir / f"U+{cp:04X}_{gn}.svg", gn, cp, adv, d, f"r138-composed/{style_key}")
+                write_svg(r138_dir / f"U+{cp:04X}_{gn}.svg", gn, cp, adv, d, f"r159-composed/{style_key}")
                 composed += 1
             else:
                 is_box = (0x2500 <= cp <= 0x259F) or (0xE0A0 <= cp <= 0xE0D4)
@@ -150,7 +150,7 @@ def main():
 
         final_count = len(load_svg_dir(r138_dir))
         print(
-            f"Extended svg/route138/{style_key}: {final_count} glyphs "
+            f"Extended svg/route159/{style_key}: {final_count} glyphs "
             f"(covers all {len(hack_map)} Hack glyphs: +{composed} composed from R138, +{scaled} scaled from Hack)"
         )
 
@@ -161,8 +161,8 @@ def main():
         .translate(0, -ITALIC_PIVOT_Y)
     )
     for src_style, dst_style in ITALIC_PAIRS:
-        src_map = load_svg_dir(SVG_ROOT / "route138" / src_style)
-        dst_dir = SVG_ROOT / "route138" / dst_style
+        src_map = load_svg_dir(SVG_ROOT / "route159" / src_style)
+        dst_dir = SVG_ROOT / "route159" / dst_style
         dst_map = load_svg_dir(dst_dir)
         added = 0
         for cp, (_, root) in sorted(src_map.items()):
@@ -173,7 +173,7 @@ def main():
             d, _ = transform_svg_path(root, shear_t)
             write_svg(dst_dir / f"U+{cp:04X}_{gn}.svg", gn, cp, adv, d, f"oblique({src_style},{ITALIC_ANGLE}deg)")
             added += 1
-        print(f"Extended svg/route138/{dst_style}: {len(dst_map) + added} glyphs (+{added} oblique from {src_style})")
+        print(f"Extended svg/route159/{dst_style}: {len(dst_map) + added} glyphs (+{added} oblique from {src_style})")
 
 
 if __name__ == "__main__":

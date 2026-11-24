@@ -93,8 +93,7 @@ def build_specimen(out_path: Path, svg_family_dir: Path, display_name: str, samp
 
 def main():
     sample_lines = [line.rstrip("\n") for line in SAMPLE_FILE.read_text(encoding="utf-8").splitlines() if line.strip()]
-    build_specimen(ROOT / "route138-repr.svg", SVG_ROOT / "route138", "Route 138", sample_lines, size_scale=1.0)
-    build_specimen(ROOT / "route038-repr.svg", SVG_ROOT / "route038", "Route 038", sample_lines, size_scale=0.82)
+    build_specimen(ROOT / "route059-repr.svg", SVG_ROOT / "route059", "Route 059", sample_lines, size_scale=0.82)
 
 
 if __name__ == "__main__":
